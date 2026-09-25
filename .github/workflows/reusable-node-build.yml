@@ -1,0 +1,71 @@
+name: Reusable · Node lint & test
+
+# Wraps the repeated inner steps of a frontend/Node CI job (checkout, Node
+# setup, install, lint, typecheck, test). Project-specific orchestration
+# (GitFlow branch rules, deploy jobs, API-client generation) stays in the
+# calling workflow. Single-project repos only — a yarn/npm workspaces
+# monorepo needs its own dependency caching and isn't covered here.
+#
+# Usage from a project's own workflow:
+#
+#   jobs:
+#     ci:
+#       uses: FNTEC/ops-templates/.github/workflows/reusable-node-build.yml@v1
+#       with:
+#         typecheck-command: yarn typecheck
+#         test-command: yarn test:coverage
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: '22'
+      package-manager:
+        type: string
+        default: 'yarn'
+      working-directory:
+        type: string
+        default: '.'
+      install-command:
+        type: string
+        default: 'yarn install --frozen-lockfile'
+      lint-command:
+        type: string
+        default: 'yarn lint'
+      typecheck-command:
+        type: string
+        default: ''
+      test-command:
+        type: string
+        default: 'yarn test'
+
+jobs:
+  build:
+    name: Lint & test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+
+      - name: Install dependencies
+        run: ${{ inputs.install-command }}
+
+      - name: Lint
+        if: inputs.lint-command != ''
+        run: ${{ inputs.lint-command }}
+
+      - name: Typecheck
+        if: inputs.typecheck-command != ''
+        run: ${{ inputs.typecheck-command }}
+
+      - name: Test
+        if: inputs.test-command != ''
+        run: ${{ inputs.test-command }}

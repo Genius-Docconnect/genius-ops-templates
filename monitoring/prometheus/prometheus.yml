@@ -1,0 +1,35 @@
+# Prometheus joins the app's Docker network (APP_NETWORK): targets resolve
+# by Docker DNS name. __APP_TARGET__ must be a stable network alias set on
+# the app container in its own docker-compose.yml, so this file doesn't need
+# to change when the container name changes across environments.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # Spring Boot Actuator on the management port (never published on the host).
+  - job_name: __APP_JOB__
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["__APP_TARGET__"]
+
+  # Containers (CPU / memory per container) and host (disk, etc.).
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

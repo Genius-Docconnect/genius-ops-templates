@@ -1,0 +1,10 @@
+# Drop exported dashboard JSON files into ./json — they are loaded on
+# startup and re-read every 30 s.
+apiVersion: 1
+
+providers:
+  - name: app
+    type: file
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards/json

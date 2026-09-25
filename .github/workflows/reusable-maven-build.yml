@@ -1,0 +1,64 @@
+name: Reusable · Maven build & test
+
+# Wraps the repeated inner steps of a Spring Boot CI job (checkout, JDK
+# setup, mvn verify, surefire report). Project-specific orchestration
+# (monorepo change-detection, GitFlow branch rules, matrix over services)
+# stays in the calling workflow — call this job once per service.
+#
+# Usage from a project's own workflow:
+#
+#   jobs:
+#     build:
+#       uses: FNTEC/ops-templates/.github/workflows/reusable-maven-build.yml@v1
+#       with:
+#         working-directory: services/my-service
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        type: string
+        default: '21'
+      java-distribution:
+        type: string
+        default: 'temurin'
+      maven-args:
+        type: string
+        default: '-B verify'
+      working-directory:
+        type: string
+        default: '.'
+
+jobs:
+  build:
+    name: Build & test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: ${{ inputs.java-distribution }}
+          java-version: ${{ inputs.java-version }}
+          cache: maven
+
+      - name: Build & test
+        run: mvn ${{ inputs.maven-args }}
+
+      - name: Sanitize working directory for artifact name
+        if: always()
+        id: slug
+        run: echo "value=$(echo '${{ inputs.working-directory }}' | tr '/.' '--')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload surefire reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # Suffixed by working-directory so a caller invoking this workflow
+          # once per service (matrix) doesn't collide on the artifact name.
+          name: surefire-reports-${{ steps.slug.outputs.value }}
+          path: ${{ inputs.working-directory }}/target/surefire-reports
+          if-no-files-found: ignore

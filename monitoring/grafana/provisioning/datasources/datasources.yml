@@ -1,0 +1,41 @@
+# Logs <-> traces correlation through a `traceId` field written by the app's
+# JSON logs and by Micrometer Tracing (spans). Works unchanged whatever the
+# app's slug is: the Loki query below matches any `service` label.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    uid: prometheus
+    isDefault: true
+    editable: true
+
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    uid: loki
+    editable: true
+    jsonData:
+      derivedFields:
+        - datasourceUid: tempo
+          matcherRegex: '"traceId":"(\w+)"'
+          name: TraceID
+          url: '$${__value.raw}'
+
+  - name: Tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    uid: tempo
+    editable: true
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki
+        filterByTraceID: true
+        customQuery: true
+        query: '{service=~".+"} | json | traceId="$${__trace.traceId}"'
+      serviceMap:
+        datasourceUid: prometheus

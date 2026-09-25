@@ -1,0 +1,87 @@
+# Starting set covering the most likely failures for a Spring Boot /
+# Micrometer app. Edit freely once instantiated — this is a starting point,
+# not a contract with ops-templates.
+groups:
+  - name: __APP_JOB__
+    rules:
+      - alert: AppDown
+        expr: up{job="__APP_JOB__"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "__APP_LABEL__ unreachable for 2 min ({{ $labels.instance }})"
+
+      - alert: AppHighErrorRate
+        expr: |
+          sum(rate(http_server_requests_seconds_count{job="__APP_JOB__", uri!~"/actuator.*", status=~"5.."}[5m]))
+          /
+          sum(rate(http_server_requests_seconds_count{job="__APP_JOB__", uri!~"/actuator.*"}[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "__APP_LABEL__: 5xx rate above 5% over 5 min"
+
+      - alert: AppHighLatency
+        # Mean latency (sum/count): always available. A real p95 needs
+        # management.metrics.distribution.percentiles-histogram.http.server.requests=true
+        # (not enabled by default: one series per bucket x uri x status).
+        expr: |
+          sum(rate(http_server_requests_seconds_sum{job="__APP_JOB__", uri!~"/actuator.*"}[5m]))
+          /
+          sum(rate(http_server_requests_seconds_count{job="__APP_JOB__", uri!~"/actuator.*"}[5m]))
+          > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "__APP_LABEL__: mean latency above 2 s over 5 min"
+
+      - alert: JvmHeapHigh
+        expr: |
+          sum by (instance) (jvm_memory_used_bytes{job="__APP_JOB__", area="heap"})
+          /
+          sum by (instance) (jvm_memory_max_bytes{job="__APP_JOB__", area="heap"})
+          > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "__APP_LABEL__: JVM heap above 85% for 5 min"
+
+      - alert: DbConnectionPoolStarved
+        # Requests waiting for a Hikari connection: pool too small, slow
+        # queries or the DB struggling. Remove if the app doesn't use Hikari.
+        expr: max(hikaricp_connections_pending{job="__APP_JOB__"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "__APP_LABEL__: threads waiting for a DB connection for 5 min"
+
+  - name: host
+    rules:
+      # BEGIN DB_DOWN_ALERT
+      # Only kept when new-monitoring-stack.sh is given a db-container-regex;
+      # dropped otherwise (no DB container to watch, e.g. managed/external DB).
+      - alert: DbContainerDown
+        # cAdvisor stops exporting a container's series once it is stopped.
+        expr: absent(container_last_seen{name=~"__DB_CONTAINER_REGEX__"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DB container not running for 2 min"
+      # END DB_DOWN_ALERT
+
+      - alert: DiskSpaceLow
+        # Allow-list of real disk filesystems rather than excluding virtual ones.
+        expr: |
+          node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs"} / node_filesystem_size_bytes{fstype=~"ext4|xfs|btrfs"} < 0.15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} below 15% free"

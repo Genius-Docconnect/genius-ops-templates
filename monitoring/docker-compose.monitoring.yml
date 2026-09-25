@@ -1,0 +1,234 @@
+# Monitoring stack template for __SLUG__: Prometheus, Alertmanager, Grafana,
+# Loki + Alloy (logs), Tempo (traces), cAdvisor + node-exporter.
+#
+# Not meant to run from ops-templates itself. Instantiate it into the target
+# project with scripts/new-monitoring-stack.sh (see monitoring/README.md),
+# which replaces the __PLACEHOLDER__ tokens below.
+#
+# Joins the app's Docker network (APP_NETWORK, created by the app's own
+# docker-compose.yml) so Prometheus can reach __APP_TARGET__ and the app can
+# send traces to tempo:4318 without publishing anything extra on the host.
+#
+#   docker compose --env-file .env.monitoring -f docker-compose.monitoring.yml up -d
+
+name: __SLUG__-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: __SLUG__-prometheus
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - app
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 400M
+
+  # prom/alertmanager is busybox-based (no envsubst) and does not expand env
+  # vars in its own config: this one-shot alpine container renders the
+  # template into a shared volume before Alertmanager starts.
+  alertmanager-config:
+    image: alpine:3.20
+    container_name: __SLUG__-alertmanager-config
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache gettext >/dev/null
+        envsubst < /tpl/alertmanager.yml.tpl > /rendered/alertmanager.yml
+    environment:
+      ALERT_SMTP_HOST: ${ALERT_SMTP_HOST:?required - see .env.monitoring.example}
+      ALERT_SMTP_FROM: ${ALERT_SMTP_FROM:?required - see .env.monitoring.example}
+      ALERT_SMTP_USERNAME: ${ALERT_SMTP_USERNAME:?required - see .env.monitoring.example}
+      ALERT_SMTP_PASSWORD: ${ALERT_SMTP_PASSWORD:?required - see .env.monitoring.example}
+      ALERT_RECIPIENTS: ${ALERT_RECIPIENTS:?required - see .env.monitoring.example}
+    volumes:
+      - ./alertmanager/alertmanager.yml:/tpl/alertmanager.yml.tpl:ro
+      - alertmanager_config:/rendered
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: __SLUG__-alertmanager
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9093/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    depends_on:
+      alertmanager-config:
+        condition: service_completed_successfully
+    volumes:
+      - alertmanager_config:/etc/alertmanager
+      - alertmanager_data:/alertmanager
+    networks:
+      - app
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  loki:
+    image: grafana/loki:3.2.1
+    container_name: __SLUG__-loki
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3100/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    networks:
+      - app
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 400M
+
+  alloy:
+    image: grafana/alloy:v1.5.1
+    container_name: __SLUG__-alloy
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - app
+    depends_on:
+      loki:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    container_name: __SLUG__-tempo
+    restart: unless-stopped
+    command: -config.file=/etc/tempo/tempo.yml
+    volumes:
+      - ./tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo_data:/var/tempo
+    networks:
+      - app
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 400M
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: __SLUG__-cadvisor
+    restart: unless-stopped
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - app
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: __SLUG__-node-exporter
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+    # Plain `:ro` rather than the recommended `:ro,rslave`, which fails on
+    # hosts whose `/` is not shared/slave-propagated. Switch back if the
+    # server allows it (otherwise host mounts added after startup are missed).
+    volumes:
+      - /:/host:ro
+    networks:
+      - app
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 64M
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    container_name: __SLUG__-grafana
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?required - see .env.monitoring.example}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      # Only port published, and on loopback only: reach it through an SSH
+      # tunnel (see README.md). Everything else stays on the Docker network.
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    networks:
+      - app
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+networks:
+  app:
+    external: true
+    name: ${APP_NETWORK:?required - e.g. __SLUG__-prod-network or __SLUG__-staging-network}
+
+volumes:
+  prometheus_data:
+  alertmanager_config:
+  alertmanager_data:
+  loki_data:
+  tempo_data:
+  grafana_data:
