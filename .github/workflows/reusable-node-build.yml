@@ -10,7 +10,7 @@ name: Reusable · Node lint & test
 #
 #   jobs:
 #     ci:
-#       uses: FNTEC/ops-templates/.github/workflows/reusable-node-build.yml@v1
+#       uses: Genius-Docconnect/genius-ops-templates/.github/workflows/reusable-node-build.yml@v1
 #       with:
 #         typecheck-command: yarn typecheck
 #         test-command: yarn test:coverage

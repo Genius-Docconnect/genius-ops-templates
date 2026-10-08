@@ -12,9 +12,9 @@ name: Reusable · Promote to genius-ops-delivery
 #   jobs:
 #     promote-staging:
 #       needs: docker-push
-#       uses: FNTEC/ops-templates/.github/workflows/reusable-promote-deploy.yml@v1
+#       uses: Genius-Docconnect/genius-ops-templates/.github/workflows/reusable-promote-deploy.yml@v1
 #       with:
-#         delivery-repo: <org>/genius-ops-delivery
+#         delivery-repo: Genius-Docconnect/genius-ops-delivery
 #         stack: staging/host-1/docconnect-api
 #         images: |
 #           ghcr.io/genius-docconnect/api-gateway=${{ github.sha }}

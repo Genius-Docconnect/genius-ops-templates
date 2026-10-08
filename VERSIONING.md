@@ -36,6 +36,5 @@ GitHub itself recommends for actions.
 ## Releasing
 
 1. Update `CHANGELOG.md`.
-2. Tag: `git tag v1.2.3 && git push origin v1.2.3` (once this repo has a
-   remote).
+2. Tag: `git tag v1.2.3 && git push origin v1.2.3`.
 3. Move the major tag: `git tag -f v1 v1.2.3 && git push -f origin v1`.

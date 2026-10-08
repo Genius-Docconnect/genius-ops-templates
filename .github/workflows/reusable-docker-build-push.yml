@@ -9,7 +9,7 @@ name: Reusable · Docker build & push
 #   jobs:
 #     publish:
 #       needs: build
-#       uses: FNTEC/ops-templates/.github/workflows/reusable-docker-build-push.yml@v1
+#       uses: Genius-Docconnect/genius-ops-templates/.github/workflows/reusable-docker-build-push.yml@v1
 #       with:
 #         image: ghcr.io/fntec/fntecapi
 #         tags: staging,sha-${{ github.sha }}

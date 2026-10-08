@@ -1,4 +1,4 @@
-# ops-templates
+# genius-ops-templates
 
 Reusable ops patterns shared across projects: a monitoring-stack template
 and a handful of GitHub Actions reusable workflows. Extracted after the
@@ -19,7 +19,7 @@ repo at runtime:
   deliberately want to pull in a template change.
 - **`.github/workflows/`** are GitHub-native [reusable workflows](https://docs.github.com/en/actions/using-workflows/reusing-workflows)
   (`workflow_call`). A project's own workflow references one by tag
-  (`uses: FNTEC/ops-templates/.github/workflows/reusable-maven-build.yml@v1`)
+  (`uses: Genius-Docconnect/genius-ops-templates/.github/workflows/reusable-maven-build.yml@v1`)
   — GitHub resolves and runs it, no copying involved. This is the one place
   where projects *do* stay live-coupled to this repo, which is why versioning
   (see below) matters more here than for `monitoring/`.
@@ -62,13 +62,13 @@ to do with the result.
 ```yaml
 jobs:
   build:
-    uses: FNTEC/ops-templates/.github/workflows/reusable-maven-build.yml@v1
+    uses: Genius-Docconnect/genius-ops-templates/.github/workflows/reusable-maven-build.yml@v1
     with:
       working-directory: .
 
   publish:
     needs: build
-    uses: FNTEC/ops-templates/.github/workflows/reusable-docker-build-push.yml@v1
+    uses: Genius-Docconnect/genius-ops-templates/.github/workflows/reusable-docker-build-push.yml@v1
     with:
       image: ghcr.io/fntec/fntecapi
       tags: staging,sha-${{ github.sha }}
@@ -82,9 +82,9 @@ jobs:
 ```yaml
   promote-staging:
     needs: publish
-    uses: FNTEC/ops-templates/.github/workflows/reusable-promote-deploy.yml@v1
+    uses: Genius-Docconnect/genius-ops-templates/.github/workflows/reusable-promote-deploy.yml@v1
     with:
-      delivery-repo: <org>/genius-ops-delivery
+      delivery-repo: Genius-Docconnect/genius-ops-delivery
       stack: staging/host-1/fntec-api
       images: ghcr.io/fntec/fntecapi=sha-${{ github.sha }}
       auto-merge: true
@@ -97,9 +97,8 @@ FNTEC, ecitoyen, eWorkPermit, GeniusTechnologies). A reusable workflow in a
 *private* repo can only be called from the same org, so this repo has to be
 public (it holds no secrets) for `uses:` to work everywhere.
 
-Note this repo currently has no remote — `uses:` references only resolve
-once it's pushed to GitHub. Until then, treat the examples above as the
-target shape.
+Not tagged yet: `@v1` only resolves after the first release (see
+VERSIONING.md). During the OPS-2 pilot, reference `@main` deliberately.
 
 ## Versioning
 

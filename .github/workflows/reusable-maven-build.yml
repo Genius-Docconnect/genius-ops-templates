@@ -9,7 +9,7 @@ name: Reusable · Maven build & test
 #
 #   jobs:
 #     build:
-#       uses: FNTEC/ops-templates/.github/workflows/reusable-maven-build.yml@v1
+#       uses: Genius-Docconnect/genius-ops-templates/.github/workflows/reusable-maven-build.yml@v1
 #       with:
 #         working-directory: services/my-service
 
