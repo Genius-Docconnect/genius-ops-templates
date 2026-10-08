@@ -1,0 +1,127 @@
+name: Reusable · Promote to genius-ops-delivery
+
+# Remplace les jobs « deploy » SSH dupliqués dans chaque projet (ssh + docker compose pull) :
+# après le push des images, ouvre dans genius-ops-delivery une PR qui change le tag des images
+# du Stack visé. La fusion déclenche le déploiement (deploy.yml de genius-ops-delivery) ;
+# l'historique Git donne quelle version tourne où, et le rollback est un `git revert`.
+#
+# OPS-2, volet 2 — candidat « étape CI custom ». Le projet n'a plus d'accès SSH aux serveurs.
+#
+# Usage depuis le workflow d'un projet, après le push d'images taguées par sha :
+#
+#   jobs:
+#     promote-staging:
+#       needs: docker-push
+#       uses: FNTEC/ops-templates/.github/workflows/reusable-promote-deploy.yml@v1
+#       with:
+#         delivery-repo: <org>/genius-ops-delivery
+#         stack: staging/host-1/docconnect-api
+#         images: |
+#           ghcr.io/genius-docconnect/api-gateway=${{ github.sha }}
+#           ghcr.io/genius-docconnect/appointment-service=${{ github.sha }}
+#         auto-merge: true          # staging : fusion directe ; prod : laisser false (relecture)
+#       secrets:
+#         delivery-token: ${{ secrets.OPS_DELIVERY_TOKEN }}
+#
+# delivery-token : jeton (GitHub App de préférence, sinon PAT fine-grained) avec Contents et
+# Pull requests en écriture sur genius-ops-delivery UNIQUEMENT. GITHUB_TOKEN ne suffit pas :
+# il est limité au dépôt appelant.
+
+on:
+  workflow_call:
+    inputs:
+      stack:
+        type: string
+        required: true
+        description: 'Stack cible dans genius-ops-delivery, ex. staging/host-1/docconnect-api'
+      images:
+        type: string
+        required: true
+        description: 'Une ligne par image : <image sans tag>=<tag> (sha ou version, jamais latest)'
+      delivery-repo:
+        type: string
+        required: true
+        description: 'Dépôt owner/name de genius-ops-delivery'
+      auto-merge:
+        type: boolean
+        default: false
+        description: 'Fusionner la PR sans relecture (à réserver au staging)'
+    secrets:
+      delivery-token:
+        required: true
+    outputs:
+      pr-url:
+        description: 'URL de la PR de bump (vide si rien à changer)'
+        value: ${{ jobs.promote.outputs.pr-url }}
+
+jobs:
+  promote:
+    name: Bump ${{ inputs.stack }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Deux runs sur le même Stack ouvriraient des PR concurrentes sur les mêmes lignes.
+    concurrency:
+      group: promote-${{ inputs.stack }}
+      cancel-in-progress: false
+    outputs:
+      pr-url: ${{ steps.pr.outputs.url }}
+    steps:
+      - name: Checkout genius-ops-delivery
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.delivery-repo }}
+          token: ${{ secrets.delivery-token }}
+
+      - name: Bump images
+        id: bump
+        env:
+          IMAGES: ${{ inputs.images }}
+        run: |
+          set -euo pipefail
+          PAIRS=()
+          while IFS= read -r LINE; do
+            LINE="$(echo "$LINE" | xargs)"
+            [[ -n "$LINE" ]] && PAIRS+=("$LINE")
+          done <<< "$IMAGES"
+          [[ ${#PAIRS[@]} -gt 0 ]] || { echo "inputs.images vide" >&2; exit 1; }
+
+          scripts/bump-image.sh "${{ inputs.stack }}" "${PAIRS[@]}" | tee bump.log
+          if git diff --quiet; then
+            echo "Versions déjà en place : rien à faire."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR
+        id: pr
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.delivery-token }}
+          SOURCE: ${{ github.repository }}@${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          BRANCH="bump/$(echo '${{ inputs.stack }}' | tr '/' '-')-${{ github.run_id }}-${{ github.run_attempt }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git commit -am "bump(${{ inputs.stack }}): ${SOURCE}"
+          git push origin "$BRANCH"
+          {
+            echo "Source : \`${SOURCE}\` — [run CI](${RUN_URL})"
+            echo
+            echo '```'
+            cat bump.log
+            echo '```'
+          } > body.md
+          URL=$(gh pr create --title "bump(${{ inputs.stack }}): ${{ github.repository }}" --body-file body.md)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "PR : $URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Auto-merge
+        if: steps.bump.outputs.changed == 'true' && inputs.auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.delivery-token }}
+        # --auto attend le check bloquant (check.yml) si la branche main est protégée.
+        run: gh pr merge "${{ steps.pr.outputs.url }}" --squash --auto --delete-branch

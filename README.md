@@ -43,6 +43,7 @@ scripts/
   reusable-maven-build.yml     Spring Boot: checkout, JDK, mvn verify
   reusable-node-build.yml      Node: checkout, install, lint, typecheck, test
   reusable-docker-build-push.yml   Buildx + GHA cache + registry push
+  reusable-promote-deploy.yml  Bump PR into genius-ops-delivery (replaces per-project SSH deploy jobs)
 ```
 
 ## Quickstart
@@ -76,6 +77,26 @@ jobs:
       registry-password: ${{ secrets.GITHUB_TOKEN }}
 ```
 
+**Deploy**, after the images are pushed (tag by sha, never `latest`):
+
+```yaml
+  promote-staging:
+    needs: publish
+    uses: FNTEC/ops-templates/.github/workflows/reusable-promote-deploy.yml@v1
+    with:
+      delivery-repo: <org>/genius-ops-delivery
+      stack: staging/host-1/fntec-api
+      images: ghcr.io/fntec/fntecapi=sha-${{ github.sha }}
+      auto-merge: true
+    secrets:
+      delivery-token: ${{ secrets.OPS_DELIVERY_TOKEN }}
+```
+
+**Cross-org caveat**: the projects live in five GitHub orgs (Genius-Docconnect,
+FNTEC, ecitoyen, eWorkPermit, GeniusTechnologies). A reusable workflow in a
+*private* repo can only be called from the same org, so this repo has to be
+public (it holds no secrets) for `uses:` to work everywhere.
+
 Note this repo currently has no remote — `uses:` references only resolve
 once it's pushed to GitHub. Until then, treat the examples above as the
 target shape.
@@ -95,7 +116,10 @@ archetypes seen across the FNTEC/Docconnect/eCitoyen/eWorkPermit projects
 already being duplicated by hand (the monitoring stack). It does **not**
 (yet) cover: app-level `docker-compose.yml` patterns (they vary more by
 project — DB choice, ports — and weren't duplicated verbatim like monitoring
-was), a Node/frontend monitoring variant, or any deploy/orchestration logic.
+was) or a Node/frontend monitoring variant. Deployment is covered only by
+`reusable-promote-deploy.yml`, which never touches a server: it opens a
+version-bump PR in `genius-ops-delivery` (the runtime source of truth, one
+folder per environment/host/app), and that repo's own CI deploys (OPS-2).
 Add those when a second real instance of the duplication shows up, not
 speculatively.
 
