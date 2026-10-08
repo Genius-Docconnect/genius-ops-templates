@@ -85,7 +85,7 @@ jobs:
     uses: Genius-Docconnect/genius-ops-templates/.github/workflows/reusable-promote-deploy.yml@v1
     with:
       delivery-repo: Genius-Docconnect/genius-ops-delivery
-      stack: staging/host-1/fntec-api
+      stack: staging/host-1/fntec
       images: ghcr.io/fntec/fntecapi=sha-${{ github.sha }}
       auto-merge: true
     secrets:

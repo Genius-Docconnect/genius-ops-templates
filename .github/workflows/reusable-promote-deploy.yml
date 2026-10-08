@@ -15,7 +15,7 @@ name: Reusable · Promote to genius-ops-delivery
 #       uses: Genius-Docconnect/genius-ops-templates/.github/workflows/reusable-promote-deploy.yml@v1
 #       with:
 #         delivery-repo: Genius-Docconnect/genius-ops-delivery
-#         stack: staging/host-1/docconnect-api
+#         stack: staging/host-1/docconnect
 #         images: |
 #           ghcr.io/genius-docconnect/api-gateway=${{ github.sha }}
 #           ghcr.io/genius-docconnect/appointment-service=${{ github.sha }}
@@ -33,7 +33,7 @@ on:
       stack:
         type: string
         required: true
-        description: 'Stack cible dans genius-ops-delivery, ex. staging/host-1/docconnect-api'
+        description: 'Stack cible dans genius-ops-delivery, ex. staging/host-1/docconnect'
       images:
         type: string
         required: true
