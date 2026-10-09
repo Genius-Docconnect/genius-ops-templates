@@ -20,8 +20,13 @@ name: Reusable · Promote to genius-ops-delivery
 #           ghcr.io/genius-docconnect/api-gateway=${{ github.sha }}
 #           ghcr.io/genius-docconnect/appointment-service=${{ github.sha }}
 #         auto-merge: true          # staging : fusion après check.py ; prod : laisser false (relecture)
+#         ignore-gel: false         # true pour un correctif (hotfix/*) : passe malgré le gel
 #       secrets:
 #         delivery-token: ${{ secrets.OPS_DELIVERY_TOKEN }}
+#
+# Gel (recette en cours) : si le Stack porte `gel: true` dans inventaire.yaml, la fusion auto est
+# suspendue. Les bumps s'empilent sur une seule branche `gel/<stack>` et une seule PR, à fusionner
+# à la main en fin de recette (runbooks/gel-recette.md de genius-ops-delivery).
 #
 # delivery-token : jeton (GitHub App de préférence, sinon PAT fine-grained) avec Contents et
 # Pull requests en écriture sur genius-ops-delivery UNIQUEMENT. GITHUB_TOKEN ne suffit pas :
@@ -46,6 +51,10 @@ on:
         type: boolean
         default: false
         description: 'Fusionner la PR sans relecture, après check.py (à réserver au staging)'
+      ignore-gel:
+        type: boolean
+        default: false
+        description: 'Ignorer le gel du Stack (correctifs hotfix/* uniquement)'
     secrets:
       delivery-token:
         required: true
@@ -71,6 +80,39 @@ jobs:
         with:
           repository: ${{ inputs.delivery-repo }}
           token: ${{ secrets.delivery-token }}
+
+      - name: Gel ?
+        id: gel
+        env:
+          STACK: ${{ inputs.stack }}
+          IGNORE_GEL: ${{ inputs.ignore-gel }}
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          GEL=$(python3 - <<'PY'
+          import os, yaml
+          stack = os.environ["STACK"]
+          env_, host_, path = stack.split("/", 2)   # staging/host-1/docconnect, staging/host-1/_infra/db
+          host = f"{env_}/{host_}"
+          inv = yaml.safe_load(open("inventaire.yaml"))
+          entries = [s for s in inv["hosts"][host]["stacks"] if s["path"] == path]
+          if not entries:
+              raise SystemExit(f"Stack absent de inventaire.yaml : {stack}")
+          print("true" if entries[0].get("gel") is True else "false")
+          PY
+          )
+          [[ "$IGNORE_GEL" == "true" ]] && GEL=false
+          echo "frozen=$GEL" >> "$GITHUB_OUTPUT"
+          BRANCH="gel/$(echo "$STACK" | tr '/' '-')"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          if [[ "$GEL" == "true" ]]; then
+            echo "❄️ Stack gelé (recette en cours) : bump empilé sur \`$BRANCH\`, pas de fusion." >> "$GITHUB_STEP_SUMMARY"
+            # Reprendre la branche de gel si elle existe déjà : les bumps s'y cumulent.
+            if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+              git fetch --quiet origin "$BRANCH"
+              git checkout --quiet -B "$BRANCH" FETCH_HEAD
+            fi
+          fi
 
       - name: Bump images
         id: bump
@@ -100,14 +142,12 @@ jobs:
           GH_TOKEN: ${{ secrets.delivery-token }}
           SOURCE: ${{ github.repository }}@${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FROZEN: ${{ steps.gel.outputs.frozen }}
+          GEL_BRANCH: ${{ steps.gel.outputs.branch }}
         run: |
           set -euo pipefail
-          BRANCH="bump/$(echo '${{ inputs.stack }}' | tr '/' '-')-${{ github.run_id }}-${{ github.run_attempt }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
-          git commit -am "bump(${{ inputs.stack }}): ${SOURCE}"
-          git push origin "$BRANCH"
           {
             echo "Source : \`${SOURCE}\` — [run CI](${RUN_URL})"
             echo
@@ -115,7 +155,26 @@ jobs:
             cat bump.log
             echo '```'
           } > body.md
-          URL=$(gh pr create --title "bump(${{ inputs.stack }}): ${{ github.repository }}" --body-file body.md)
+
+          if [[ "$FROZEN" == "true" ]]; then
+            BRANCH="$GEL_BRANCH"
+            git checkout -B "$BRANCH"
+            git commit -am "bump(${{ inputs.stack }}): ${SOURCE}"
+            git push origin "$BRANCH"
+            URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
+            if [[ -z "$URL" ]]; then
+              { echo "❄️ **Stack gelé** : bumps cumulés pendant la recette. Fusionner à la main en fin de recette."; echo; cat body.md; } > gel.md
+              URL=$(gh pr create --head "$BRANCH" --title "bump(${{ inputs.stack }}) — gel : bumps en attente" --body-file gel.md)
+            else
+              gh pr comment "$URL" --body-file body.md
+            fi
+          else
+            BRANCH="bump/$(echo '${{ inputs.stack }}' | tr '/' '-')-${{ github.run_id }}-${{ github.run_attempt }}"
+            git checkout -b "$BRANCH"
+            git commit -am "bump(${{ inputs.stack }}): ${SOURCE}"
+            git push origin "$BRANCH"
+            URL=$(gh pr create --title "bump(${{ inputs.stack }}): ${{ github.repository }}" --body-file body.md)
+          fi
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "PR : $URL" >> "$GITHUB_STEP_SUMMARY"
 
@@ -123,13 +182,13 @@ jobs:
       # protection de branche, indisponible sur un dépôt privé en GitHub Free.
       # Mêmes garde-fous que check.yml (tags figés, ports, secrets), lancés ici sur la branche de bump.
       - name: Check (scripts/check.py)
-        if: steps.bump.outputs.changed == 'true' && inputs.auto-merge
+        if: steps.bump.outputs.changed == 'true' && inputs.auto-merge && steps.gel.outputs.frozen != 'true'
         run: |
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           python3 scripts/check.py
 
       - name: Merge
-        if: steps.bump.outputs.changed == 'true' && inputs.auto-merge
+        if: steps.bump.outputs.changed == 'true' && inputs.auto-merge && steps.gel.outputs.frozen != 'true'
         env:
           GH_TOKEN: ${{ secrets.delivery-token }}
         # Fusion avec le jeton (pas GITHUB_TOKEN) : le push sur main déclenche bien deploy.yml.
