@@ -16,4 +16,6 @@
 - `reusable-promote-deploy.yml`: freeze (`gel: true` on the Stack in `inventaire.yaml`) suspends
   auto-merge; bumps pile up on a single `gel/<stack>` branch and PR, merged by hand after QA.
   New input `ignore-gel` for hotfixes.
+- `reusable-promote-deploy.yml`: optional `version` input, shown in the bump PR title and commit
+  (`bump(<stack>): <repo> 1.42.0`).
 - Not yet tagged — see README "Rollout".
