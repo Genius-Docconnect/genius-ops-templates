@@ -18,4 +18,8 @@
   New input `ignore-gel` for hotfixes.
 - `reusable-promote-deploy.yml`: optional `version` input, shown in the bump PR title and commit
   (`bump(<stack>): <repo> 1.42.0`).
+- Added `reusable-version.yml` and `reusable-release.yml`: one x.y.z version per merge on `main`
+  (middle digit), `hotfix/X.Y` branches from a tag (patch digit), common version for all services
+  (unchanged images retagged), tag pushed with a PAT so tag workflows run, per-service changelog.
+  Extracted from `docconnect-micro-api` after its first real runs (1.41.0, 1.42.0).
 - Not yet tagged — see README "Rollout".

@@ -1,0 +1,211 @@
+name: Reusable · Release
+
+# Termine une version calculée par reusable-version.yml, une fois les images modifiées poussées
+# avec l'étiquette <version> :
+#   1. retag : les images NON reconstruites reçoivent aussi <version> (copie de l'étiquette
+#      <base>, sans rebuild) — version commune à tous les services de l'application ;
+#   2. tag Git v<version>, poussé avec release-token pour déclencher les workflows sur tag
+#      (contrats npm, etc.) ; un tag poussé avec GITHUB_TOKEN n'en déclenche aucun ;
+#   3. release GitHub « <app-name> <version> » avec un changelog par service (commits filtrés
+#      par dossier) ; complétée sans écraser si un workflow sur tag l'a déjà créée ;
+#   4. hotfix/* : release non « Latest » et ticket « reporter le correctif sur main ».
+#
+# Usage :
+#
+#   jobs:
+#     release:
+#       needs: [version, docker-push]
+#       if: always() && needs.version.outputs.version != '' && (needs.docker-push.result == 'success' || needs.docker-push.result == 'skipped')
+#       uses: Genius-Docconnect/genius-ops-templates/.github/workflows/reusable-release.yml@v1
+#       permissions:
+#         contents: read
+#         packages: write   # retag
+#         issues: write     # rappel de report d'un correctif
+#       with:
+#         app-name: MonAppli
+#         version: ${{ needs.version.outputs.version }}
+#         base: ${{ needs.version.outputs.base }}
+#         image-prefix: ghcr.io/mon-org/
+#         services: '["services/api", "services/worker"]'   # image = prefix + dernier segment
+#         built: ${{ needs.detect-changes.outputs.services }}  # sous-ensemble reconstruit
+#       secrets:
+#         release-token: ${{ secrets.RELEASE_TOKEN }}
+#
+# release-token : PAT fine-grained, Contents en écriture sur le dépôt appelant.
+
+on:
+  workflow_call:
+    inputs:
+      app-name:
+        type: string
+        required: true
+        description: 'Nom affiché dans le titre de la release (« Docconnect 1.42.0 »)'
+      version:
+        type: string
+        required: true
+        description: 'Version à publier (sortie version de reusable-version.yml)'
+      base:
+        type: string
+        default: ''
+        description: 'Tag de la version précédente (sortie base de reusable-version.yml)'
+      image-prefix:
+        type: string
+        default: ''
+        description: 'Préfixe des images, ex. ghcr.io/mon-org/ (vide = pas de retag)'
+      services:
+        type: string
+        default: '[]'
+        description: 'Tous les services livrés (JSON, chemins) : sections du changelog et images à retaguer'
+      built:
+        type: string
+        default: '[]'
+        description: 'Services reconstruits dans ce run (JSON, chemins), déjà étiquetés <version>'
+      changelog-extra-paths:
+        type: string
+        default: ''
+        description: 'Dossiers supplémentaires ayant leur section de changelog sans image (un par ligne)'
+    secrets:
+      release-token:
+        required: true
+
+jobs:
+  retag:
+    name: Retag unchanged images
+    if: inputs.base != '' && inputs.image-prefix != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Login to GHCR
+        if: startsWith(inputs.image-prefix, 'ghcr.io/')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retag
+        env:
+          PREFIX: ${{ inputs.image-prefix }}
+          ALL: ${{ inputs.services }}
+          CHANGED: ${{ inputs.built }}
+          BASE: ${{ inputs.base }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          for IMAGE in $(jq -r --argjson c "$CHANGED" '.[] | select(. as $s | $c | index($s) | not) | split("/")[-1]' <<< "$ALL"); do
+            REF="${PREFIX}${IMAGE}"
+            echo "${REF}:${BASE#v} → ${VERSION}"
+            docker buildx imagetools create -t "${REF}:${VERSION}" "${REF}:${BASE#v}"
+          done
+
+  release:
+    name: Tag & release
+    needs: retag
+    if: always() && (needs.retag.result == 'success' || needs.retag.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.release-token }}
+
+      - name: Tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            echo "Tag v${VERSION} déjà présent (relance)."
+          else
+            git tag "v${VERSION}" "${GITHUB_SHA}"
+            git push origin "v${VERSION}"
+          fi
+
+      # Changelog par service (version commune, mais on voit ce qui a bougé où).
+      - name: Changelog
+        env:
+          ALL: ${{ inputs.services }}
+          EXTRA: ${{ inputs.changelog-extra-paths }}
+          PREFIX: ${{ inputs.image-prefix }}
+          BASE: ${{ inputs.base }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          PATHS=$(jq -r '.[]' <<< "$ALL"; printf '%s\n' "$EXTRA" | sed '/^[[:space:]]*$/d')
+          IMAGES=""
+          [[ -n "$PREFIX" ]] && IMAGES=" Images : \`${PREFIX}<service>:${VERSION}\`."
+          {
+            if [[ -z "$BASE" ]]; then
+              echo "Première version numérotée de l'application.${IMAGES}"
+            else
+              RANGE="${BASE}..${GITHUB_SHA}"
+              echo "Changements depuis ${BASE}.${IMAGES}"
+              UNCHANGED=()
+              EXCLUDES=()
+              for P in $PATHS; do
+                EXCLUDES+=(":(exclude)$P")
+                LOG=$(git log --no-merges --format='- %s (%h)' "$RANGE" -- "$P")
+                if [[ -n "$LOG" ]]; then
+                  printf '\n### %s\n\n%s\n' "$(basename "$P")" "$LOG"
+                else
+                  UNCHANGED+=("$(basename "$P")")
+                fi
+              done
+              LOG=$(git log --no-merges --format='- %s (%h)' "$RANGE" -- . "${EXCLUDES[@]}")
+              if [[ -n "$LOG" ]]; then
+                printf '\n### Commun (modules partagés, CI, docs…)\n\n%s\n' "$LOG"
+              fi
+              if [[ ${#UNCHANGED[@]} -gt 0 ]]; then
+                printf '\n**Inchangés** (même image, nouvelle étiquette) : %s\n' "$(printf '%s, ' "${UNCHANGED[@]}" | sed 's/, $//')"
+              fi
+            fi
+          } > notes.md
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      # La release peut déjà exister (un workflow sur tag y attache ses fichiers) : on complète sans écraser.
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.release-token }}
+          VERSION: ${{ inputs.version }}
+          TITLE: ${{ inputs.app-name }} ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # Un correctif ne devient pas la release « Latest » (réservée à la dernière version principale).
+          LATEST=true
+          [[ "$GITHUB_REF" == refs/heads/hotfix/* ]] && LATEST=false
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            { cat notes.md; echo; echo '---'; echo; gh release view "v${VERSION}" --json body --jq .body; } > full.md
+            gh release edit "v${VERSION}" --title "$TITLE" --notes-file full.md --latest="$LATEST"
+          else
+            gh release create "v${VERSION}" --verify-tag --title "$TITLE" --notes-file notes.md --latest="$LATEST"
+          fi
+
+      # Correctif : sans report sur main, le bug revient à la version suivante.
+      - name: Rappel — reporter le correctif sur main
+        if: startsWith(github.ref, 'refs/heads/hotfix/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          TITLE="Reporter le correctif v${VERSION} sur main"
+          if [[ -z "$(gh issue list --state open --search "\"${TITLE}\" in:title" --json number --jq '.[0].number // empty')" ]]; then
+            {
+              echo "Le correctif **v${VERSION}** (branche \`${GITHUB_REF_NAME}\`) doit être reporté sur \`main\` le jour même :"
+              echo
+              echo '```'
+              echo "git switch main && git pull"
+              echo "git cherry-pick <commits du correctif>"
+              echo '```'
+              echo
+              echo "Fermer ce ticket avec le lien de la PR de report."
+            } > issue.md
+            gh issue create --title "$TITLE" --body-file issue.md
+          fi
+          echo "⚠️ Reporter le correctif sur main (ticket ouvert)." >> "$GITHUB_STEP_SUMMARY"

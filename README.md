@@ -44,6 +44,8 @@ scripts/
   reusable-node-build.yml      Node: checkout, install, lint, typecheck, test
   reusable-docker-build-push.yml   Buildx + GHA cache + registry push
   reusable-promote-deploy.yml  Bump PR into genius-ops-delivery (replaces per-project SSH deploy jobs)
+  reusable-version.yml         x.y.z version of a merge (main: middle digit +1; hotfix/X.Y: patch +1)
+  reusable-release.yml         Retag unchanged images, push the vX.Y.Z tag, GitHub release with per-service changelog
 ```
 
 ## Quickstart
@@ -91,6 +93,33 @@ jobs:
     secrets:
       delivery-token: ${{ secrets.OPS_DELIVERY_TOKEN }}
 ```
+
+**Versions** (one `x.y.z` per merge, trunk-based; triggers: push on `main` and `hotfix/**`):
+
+```yaml
+jobs:
+  version:
+    uses: Genius-Docconnect/genius-ops-templates/.github/workflows/reusable-version.yml@v1
+    with:
+      first-version: 1.0.0
+  # build: images tagged ${{ github.sha }} and ${{ needs.version.outputs.version }}
+  release:
+    needs: [version, build]
+    uses: Genius-Docconnect/genius-ops-templates/.github/workflows/reusable-release.yml@v1
+    permissions: { contents: read, packages: write, issues: write }
+    with:
+      app-name: FNTEC
+      version: ${{ needs.version.outputs.version }}
+      base: ${{ needs.version.outputs.base }}
+      image-prefix: ghcr.io/fntec/
+      services: '["fntecapi"]'
+      built: '["fntecapi"]'
+    secrets:
+      release-token: ${{ secrets.RELEASE_TOKEN }}
+```
+
+Full reference: `docconnect-micro-api/.github/workflows/cicd.yml` (builds only the services changed
+since the previous version). Rules: `genius-ops-delivery/decisions/2026-10-09-branches-versions-environnements.md`.
 
 **Cross-org caveat**: the projects live in five GitHub orgs (Genius-Docconnect,
 FNTEC, ecitoyen, eWorkPermit, GeniusTechnologies). A reusable workflow in a
