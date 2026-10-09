@@ -10,4 +10,7 @@
   `reusable-node-build.yml`, `reusable-docker-build-push.yml`.
 - Added `reusable-promote-deploy.yml`: opens a version-bump PR in
   `genius-ops-delivery` instead of deploying over SSH (OPS-2, volet 2).
-- Not yet tagged, not yet adopted by any project — see README "Rollout".
+- `reusable-promote-deploy.yml`: `auto-merge: true` now runs `scripts/check.py` on the bump
+  branch and merges directly. `gh pr merge --auto` needed branch protection, which GitHub Free
+  does not offer on private repos. First adopter: `docconnect-micro-api` (staging).
+- Not yet tagged — see README "Rollout".
