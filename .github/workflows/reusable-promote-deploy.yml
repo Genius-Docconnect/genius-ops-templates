@@ -19,7 +19,7 @@ name: Reusable · Promote to genius-ops-delivery
 #         images: |
 #           ghcr.io/genius-docconnect/api-gateway=${{ github.sha }}
 #           ghcr.io/genius-docconnect/appointment-service=${{ github.sha }}
-#         auto-merge: true          # staging : fusion directe ; prod : laisser false (relecture)
+#         auto-merge: true          # staging : fusion après check.py ; prod : laisser false (relecture)
 #       secrets:
 #         delivery-token: ${{ secrets.OPS_DELIVERY_TOKEN }}
 #
@@ -45,7 +45,7 @@ on:
       auto-merge:
         type: boolean
         default: false
-        description: 'Fusionner la PR sans relecture (à réserver au staging)'
+        description: 'Fusionner la PR sans relecture, après check.py (à réserver au staging)'
     secrets:
       delivery-token:
         required: true
@@ -119,9 +119,20 @@ jobs:
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "PR : $URL" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Auto-merge
+      # Fusion directe après contrôle, sans « gh pr merge --auto » : celui-ci exige une
+      # protection de branche, indisponible sur un dépôt privé en GitHub Free.
+      # Mêmes garde-fous que check.yml (tags figés, ports, secrets), lancés ici sur la branche de bump.
+      - name: Check (scripts/check.py)
+        if: steps.bump.outputs.changed == 'true' && inputs.auto-merge
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 scripts/check.py
+
+      - name: Merge
         if: steps.bump.outputs.changed == 'true' && inputs.auto-merge
         env:
           GH_TOKEN: ${{ secrets.delivery-token }}
-        # --auto attend le check bloquant (check.yml) si la branche main est protégée.
-        run: gh pr merge "${{ steps.pr.outputs.url }}" --squash --auto --delete-branch
+        # Fusion avec le jeton (pas GITHUB_TOKEN) : le push sur main déclenche bien deploy.yml.
+        run: |
+          gh pr merge "${{ steps.pr.outputs.url }}" --squash --delete-branch
+          echo "PR fusionnée : le déploiement part depuis genius-ops-delivery (Actions → Deploy)." >> "$GITHUB_STEP_SUMMARY"
