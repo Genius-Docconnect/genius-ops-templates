@@ -51,6 +51,10 @@ on:
         type: boolean
         default: false
         description: 'Fusionner la PR sans relecture, après check.py (à réserver au staging)'
+      version:
+        type: string
+        default: ''
+        description: 'Version de l application (ex. 1.42.0), affichée dans le titre et le commit du bump'
       ignore-gel:
         type: boolean
         default: false
@@ -143,12 +147,15 @@ jobs:
           SOURCE: ${{ github.repository }}@${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           FROZEN: ${{ steps.gel.outputs.frozen }}
+          VERSION: ${{ inputs.version }}
           GEL_BRANCH: ${{ steps.gel.outputs.branch }}
         run: |
           set -euo pipefail
+          LABEL="${{ github.repository }}${VERSION:+ $VERSION}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           {
+            if [[ -n "$VERSION" ]]; then echo "Version : **${VERSION}**"; echo; fi
             echo "Source : \`${SOURCE}\` — [run CI](${RUN_URL})"
             echo
             echo '```'
@@ -159,7 +166,7 @@ jobs:
           if [[ "$FROZEN" == "true" ]]; then
             BRANCH="$GEL_BRANCH"
             git checkout -B "$BRANCH"
-            git commit -am "bump(${{ inputs.stack }}): ${SOURCE}"
+            git commit -am "bump(${{ inputs.stack }}): ${LABEL} (${SOURCE})"
             git push origin "$BRANCH"
             URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
             if [[ -z "$URL" ]]; then
@@ -171,9 +178,9 @@ jobs:
           else
             BRANCH="bump/$(echo '${{ inputs.stack }}' | tr '/' '-')-${{ github.run_id }}-${{ github.run_attempt }}"
             git checkout -b "$BRANCH"
-            git commit -am "bump(${{ inputs.stack }}): ${SOURCE}"
+            git commit -am "bump(${{ inputs.stack }}): ${LABEL} (${SOURCE})"
             git push origin "$BRANCH"
-            URL=$(gh pr create --title "bump(${{ inputs.stack }}): ${{ github.repository }}" --body-file body.md)
+            URL=$(gh pr create --title "bump(${{ inputs.stack }}): ${LABEL}" --body-file body.md)
           fi
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "PR : $URL" >> "$GITHUB_STEP_SUMMARY"
